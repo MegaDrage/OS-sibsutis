@@ -10,4 +10,5 @@ typedef struct data_t {
 data_t *init_data(int number, char *name, short is_student);
 int serialize_data(data_t *data, char **serialized, size_t *s_size);
 void print_data(data_t *data);
+int deserialize_data(char **serialized_data, data_t *deserialized_data);
 #endif
