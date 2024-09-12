@@ -1,0 +1,18 @@
+[
+  {
+    "arguments": [
+      "/nix/store/gxpdysvlj9l6bfin03k6yq0s922pk7pg-gcc-wrapper-13.3.0/bin/gcc",
+      "-Wall",
+      "-Werror",
+      "-Wextra",
+      "-g",
+      "-c",
+      "-o",
+      "list.o",
+      "list.c"
+    ],
+    "directory": "/home/megadrage/Development/SIBSUTIS/Sem-5/OS-sibsutis/labs/lab2",
+    "file": "/home/megadrage/Development/SIBSUTIS/Sem-5/OS-sibsutis/labs/lab2/list.c",
+    "output": "/home/megadrage/Development/SIBSUTIS/Sem-5/OS-sibsutis/labs/lab2/list.o"
+  }
+]
