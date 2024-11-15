@@ -1,169 +1,219 @@
+#include <array>
 #include <boost/asio.hpp>
-#include <cstdlib>
-#include <dirent.h>
-#include <fstream>
+#include <csignal>
+#include <elf.h>
+#include <fcntl.h>
 #include <iostream>
 #include <nlohmann/json.hpp>
-#include <signal.h>
 #include <sstream>
 #include <string>
+#include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <vector>
 
 using boost::asio::ip::tcp;
 using json = nlohmann::json;
 
-class TCPServer {
+class TaskManager {
 public:
-  TCPServer(boost::asio::io_context &io_context, short port)
-      : acceptor_(io_context, tcp::endpoint(tcp::v4(), port)) {
-    start_accept();
+  std::string listProcesses() {
+    std::array<char, 128> buffer;
+    std::string result;
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(
+        popen("ps -e -o pid,comm,state", "r"), pclose);
+
+    if (!pipe) {
+      return "Error: Unable to fetch processes.\n";
+    }
+    while (fgets(buffer.data(), buffer.size(), pipe.get()) != nullptr) {
+      result += buffer.data();
+    }
+    return result;
   }
 
+  bool killProcess(int pid) { return kill(pid, SIGTERM) == 0; }
+
+  std::string readElfHeader(const std::string &filePath) {
+    int fd = open(filePath.c_str(), O_RDONLY);
+    if (fd == -1) {
+      return "Error: Unable to open ELF file.\n";
+    }
+
+    // Отображаем файл в память
+    struct stat fileStat;
+    if (fstat(fd, &fileStat) == -1) {
+      close(fd);
+      return "Error: Unable to get file size.\n";
+    }
+
+    void *map = mmap(nullptr, fileStat.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map == MAP_FAILED) {
+      close(fd);
+      return "Error: Unable to map ELF file to memory.\n";
+    }
+
+    Elf64_Ehdr *elfHeader = reinterpret_cast<Elf64_Ehdr *>(map);
+    std::stringstream ss;
+
+    // Проверка на ELF заголовок
+    if (elfHeader->e_ident[EI_MAG0] != ELFMAG0 ||
+        elfHeader->e_ident[EI_MAG1] != ELFMAG1 ||
+        elfHeader->e_ident[EI_MAG2] != ELFMAG2 ||
+        elfHeader->e_ident[EI_MAG3] != ELFMAG3) {
+      munmap(map, fileStat.st_size);
+      close(fd);
+      return "Error: Not a valid ELF file.\n";
+    }
+
+    ss << "ELF Header:\n";
+    ss << "  Magic:   ";
+    for (int i = 0; i < EI_NIDENT; ++i) {
+      ss << std::hex << static_cast<int>(elfHeader->e_ident[i]) << " ";
+    }
+    ss << "\n";
+    ss << "  Class:                             "
+       << (elfHeader->e_ident[EI_CLASS] == ELFCLASS64 ? "ELF64" : "ELF32")
+       << "\n";
+    ss << "  Data:                              "
+       << (elfHeader->e_ident[EI_DATA] == ELFDATA2LSB
+               ? "2's complement, little endian"
+               : "Unknown")
+       << "\n";
+    ss << "  Version:                           "
+       << static_cast<int>(elfHeader->e_ident[EI_VERSION]) << "\n";
+    ss << "  OS/ABI:                            "
+       << static_cast<int>(elfHeader->e_ident[EI_OSABI]) << "\n";
+    ss << "  Type:                              " << elfHeader->e_type << "\n";
+    ss << "  Machine:                           " << elfHeader->e_machine
+       << "\n";
+    ss << "  Version:                           " << elfHeader->e_version
+       << "\n";
+    ss << "  Entry point address:              " << std::hex
+       << elfHeader->e_entry << "\n";
+    ss << "  Start of program headers:         " << elfHeader->e_phoff << "\n";
+    ss << "  Start of section headers:         " << elfHeader->e_shoff << "\n";
+    ss << "  Flags:                             " << elfHeader->e_flags << "\n";
+    ss << "  Size of this header:              " << elfHeader->e_ehsize << "\n";
+
+    munmap(map, fileStat.st_size);
+    close(fd);
+    std::cout << ss.str() << '\n';
+    return ss.str();
+  }
+};
+
+class Session : public std::enable_shared_from_this<Session> {
+public:
+  Session(tcp::socket socket, TaskManager &taskManager)
+      : socket_(std::move(socket)), taskManager_(taskManager) {}
+
+  void start() { doRead(); }
+
 private:
-  void start_accept() {
-    acceptor_.async_accept(
-        [this](boost::system::error_code ec, tcp::socket socket) {
+  void doRead() {
+    auto self(shared_from_this());
+    socket_.async_read_some(
+        boost::asio::buffer(data_, maxLength),
+        [this, self](boost::system::error_code ec, std::size_t length) {
           if (!ec) {
-            std::cout << "creating session on: "
-                      << socket.remote_endpoint().address().to_string() << ":"
-                      << socket.remote_endpoint().port() << '\n';
-            std::make_shared<Session>(std::move(socket))->start();
-          } else {
-            std::cout << "error: " << ec.message() << std::endl;
+            std::cout << "Received request: " << data_ << '\n';
+            processCommand(std::string(data_, length));
+            doRead();
           }
-          start_accept();
         });
   }
 
-  class Session : public std::enable_shared_from_this<Session> {
-  public:
-    Session(tcp::socket socket) : socket_(std::move(socket)) {}
-
-    void start() { do_read(); }
-
-  private:
-    void do_read() {
-      auto self(shared_from_this());
-      boost::asio::async_read_until(
-          socket_, buffer_, "\n",
-          [this, self](boost::system::error_code ec, std::size_t length) {
-            if (!ec) {
-              std::istream is(&buffer_);
-              std::string request;
-              std::getline(is, request);
-              std::cout << "Request is: " << request << '\n';
-              handle_request(request);
-              do_read();
-            } else {
-              std::cout << "Read error: " << ec.message() << std::endl;
-              if (ec == boost::asio::error::eof ||
-                  ec == boost::asio::error::connection_reset) {
-                std::cout << "Client disconnected." << std::endl;
-                socket_.close();
-              }
-            }
-          });
+  void processCommand(const std::string &commandStr) {
+    json request;
+    json response;
+    std::cout << "Processing command: " << commandStr << '\n';
+    try {
+      request = json::parse(commandStr);
+    } catch (...) {
+      response["status"] = "error";
+      response["message"] = "Invalid JSON format";
+      sendResponse(response);
+      return;
     }
 
-    void handle_request(const std::string &request) {
-      try {
-        json j = json::parse(request);
-        json response;
-
-        if (j["command"] == "get_processes") {
-          std::vector<json> processes = get_processes();
-          response["processes"] = processes;
-        } else if (j["command"] == "kill_process") {
-          bool success = kill_process(j["pid"]);
-          response["success"] = success;
-        }
-
-        std::string response_str = response.dump() + "\n";
-
-        if (!socket_.is_open()) {
-          std::cerr << "Socket is closed, cannot write response." << std::endl;
-          return;
-        }
-        boost::asio::streambuf write_buffer;
-        std::ostream output(&write_buffer);
-        output << response_str;
-        boost::asio::write(socket_, write_buffer.data());
-        // boost::asio::async_write(
-        //     socket_, write_buffer.data(),
-        //     [this, self = shared_from_this()](boost::system::error_code ec,
-        //                                       std::size_t length) {
-        //       if (ec) {
-        //         std::cerr << "Write error: " << ec.what() << std::endl;
-        //       } else {
-        //         std::cout << "Write successful, length: " << length
-        //                   << std::endl;
-        //       }
-        //     });
-      } catch (const json::parse_error &e) {
-        std::cerr << "JSON parse error: " << e.what() << std::endl;
+    std::string command = request["command"];
+    if (command == "LIST") {
+      response["status"] = "success";
+      response["data"] = taskManager_.listProcesses();
+    } else if (command == "KILL" && request.contains("pid")) {
+      int pid = request["pid"];
+      bool result = taskManager_.killProcess(pid);
+      if (result) {
+        response["status"] = "success";
+        response["data"] = taskManager_.listProcesses();
+      } else {
+        response["status"] = "error";
+        response["message"] = "Unknown command";
       }
+    } else if (command == "READ_ELF" && request.contains("path")) {
+      std::string filePath = request["path"];
+      std::string elfInfo = taskManager_.readElfHeader(filePath);
+      response["status"] = "success";
+      response["elf"] = elfInfo;
+    } else {
+      response["status"] = "error";
+      response["message"] = "Unknown command";
     }
 
-    std::vector<json> get_processes() {
-      std::vector<json> processes;
-      DIR *dir = opendir("/proc");
-      if (dir) {
-        struct dirent *ent;
-        while ((ent = readdir(dir)) != nullptr) {
-          if (ent->d_type == DT_DIR) {
-            std::string dir_name = ent->d_name;
-            if (dir_name.find_first_not_of("0123456789") == std::string::npos) {
-              json process_info = get_process_info(dir_name);
-              processes.push_back(process_info);
-            }
+    sendResponse(response);
+  }
+
+  void sendResponse(const json &response) {
+    auto responseStr = response.dump() + "\n";
+    auto self(shared_from_this());
+    boost::asio::async_write(
+        socket_, boost::asio::buffer(responseStr),
+        [this, self](boost::system::error_code ec, std::size_t /*length*/) {
+          if (ec) {
+            std::cerr << "Error sending response: " << ec.message()
+                      << std::endl;
+            socket_.close();
           }
-        }
-        closedir(dir);
-      }
-      return processes;
-    }
+        });
+  }
 
-    json get_process_info(const std::string &pid) {
-      json process_info;
-      std::ifstream status_file("/proc/" + pid + "/status");
-      if (status_file.is_open()) {
-        std::string line;
-        while (std::getline(status_file, line)) {
-          size_t pos = line.find(':');
-          if (pos != std::string::npos) {
-            std::string key = line.substr(0, pos);
-            std::string value = line.substr(pos + 1);
-            value.erase(std::remove(value.begin(), value.end(), '\t'),
-                        value.end());
-            process_info[key] = value;
+  tcp::socket socket_;
+  TaskManager &taskManager_;
+  enum { maxLength = 4096 };
+  char data_[maxLength];
+};
+
+class Server {
+public:
+  Server(boost::asio::io_context &ioContext, short port)
+      : acceptor_(ioContext, tcp::endpoint(tcp::v4(), port)), taskManager_() {
+    doAccept();
+  }
+
+private:
+  void doAccept() {
+    acceptor_.async_accept(
+        [this](boost::system::error_code ec, tcp::socket socket) {
+          if (!ec) {
+            std::make_shared<Session>(std::move(socket), taskManager_)->start();
           }
-        }
-        status_file.close();
-      }
-      return process_info;
-    }
-
-    bool kill_process(const std::string &pid) {
-      pid_t pid_num = std::stoi(pid);
-      return kill(pid_num, SIGKILL) == 0;
-    }
-
-    tcp::socket socket_;
-    boost::asio::streambuf buffer_;
-  };
+          doAccept();
+        });
+  }
 
   tcp::acceptor acceptor_;
+  TaskManager taskManager_;
 };
 
 int main() {
   try {
-    boost::asio::io_context io_context;
-    TCPServer server(io_context, 12345);
-    io_context.run();
+    boost::asio::io_context ioContext;
+    Server server(ioContext, 8080);
+    std::cout << "Server listening on port 8080" << std::endl;
+    ioContext.run();
   } catch (std::exception &e) {
-    std::cerr << "Exception: " << e.what() << std::endl;
+    std::cerr << "Exception: " << e.what() << "\n";
   }
 
   return 0;
