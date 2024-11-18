@@ -1,10 +1,9 @@
 #ifndef _TASK_MANAGER_SCREEN_HPP
 #define _TASK_MANAGER_SCREEN_HPP
 
-#include "../task_manager_elf_viewer/task-manager/process_info.hpp"
-#include "TaskManagerClient.hpp"
+#include "../Structures/ProcessInfo.hpp"
+#include "../TaskManagerClient.hpp"
 #include <algorithm>
-#include <atomic>
 #include <chrono>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
@@ -14,7 +13,7 @@
 #include <vector>
 
 namespace tmelfv {
-
+namespace client {
 class TaskManagerScreen {
   std::condition_variable cv_;
   std::mutex mtx_;
@@ -31,7 +30,6 @@ public:
   void ShowProcessesScreen() {
     using namespace ftxui;
     stop_thread_ = false;
-    client_.requestProcesses();
     // Запускаем поток для автоматического обновления
     update_thread_ = std::thread([this]() {
       while (true) {
@@ -136,15 +134,11 @@ public:
 
     screen.Loop(main_renderer);
   }
-
   void UpdateProcesses(const std::vector<ProcessInfo> &processes) {
     processes_ = processes;
     UpdateProcessStrings();
     screen.PostEvent(ftxui::Event{});
   }
-
-  bool hasProcesses() const { return !processes_.empty(); }
-  std::vector<ProcessInfo> GetUpdatedProcesses() { return processes_; }
 
   void endSession() {
     stop_thread_ = true;
@@ -202,7 +196,6 @@ private:
   }
 
   void ToggleSortDirection() { sort_ascending_ = !sort_ascending_; }
-
   TaskManagerClient &client_;
   std::vector<ProcessInfo> processes_;
   std::vector<std::string> process_strings;
@@ -217,6 +210,7 @@ private:
   std::thread update_thread_;
 };
 
+} // namespace client
 } // namespace tmelfv
 
 #endif // _TASK_MANAGER_SCREEN_HPP

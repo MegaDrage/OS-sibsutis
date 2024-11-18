@@ -2,11 +2,10 @@
 #define _ELF_INFO_HPP
 #include <cstdint>
 #include <regex>
-#include <sstream>
-#include <stdexcept>
 #include <string>
 
 namespace tmelfv {
+namespace client {
 struct ElfInfo {
   std::string magic;    // Магическое число ELF
   std::string elfClass; // 32 или 64 бита (ELF32 или ELF64)
@@ -85,5 +84,6 @@ struct ElfInfo {
   }
 };
 
+} // namespace client
 } // namespace tmelfv
 #endif

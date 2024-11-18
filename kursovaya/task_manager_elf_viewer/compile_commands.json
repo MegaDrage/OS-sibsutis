@@ -1,8 +1,0 @@
-[
-{
-  "directory": "/home/megadrage/Development/SIBSUTIS/Sem-5/OS-sibsutis/kursovaya/task_manager_elf_viewer/build",
-  "command": "/nix/store/zznja5f8v3jafffyah1rk46vpfcn38dv-gcc-wrapper-13.3.0/bin/g++    -o CMakeFiles/TaskManager.dir/main.cpp.o -c /home/megadrage/Development/SIBSUTIS/Sem-5/OS-sibsutis/kursovaya/task_manager_elf_viewer/main.cpp",
-  "file": "/home/megadrage/Development/SIBSUTIS/Sem-5/OS-sibsutis/kursovaya/task_manager_elf_viewer/main.cpp",
-  "output": "CMakeFiles/TaskManager.dir/main.cpp.o"
-}
-]

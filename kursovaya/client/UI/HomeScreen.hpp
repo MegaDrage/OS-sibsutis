@@ -1,8 +1,8 @@
 #ifndef _UI_TASK_ELF_MENU_HPP
 #define _UI_TASK_ELF_MENU_HPP
 
-#include "../../client/ElfViewer.hpp"
-#include "../../client/TaskManagerScreen.hpp"
+#include "ElfViewerScreen.hpp"
+#include "TaskManagerScreen.hpp"
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/screen/screen.hpp>
@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace tmelfv {
-
+namespace client {
 enum MenuTypes { PROCESSES_VIEWER, ELF_VIEWER, EXIT };
 
 class HomeScreen {
@@ -57,6 +57,6 @@ private:
   TaskManagerScreen &tm_screen_;
   ElfViewerScreen &elf_screen_;
 };
+} // namespace client
 } // namespace tmelfv
-
 #endif // _UI_TASK_ELF_MENU_HPP

@@ -1,31 +1,27 @@
 #ifndef _TASK_MANAGER_CLIENT_HPP
 #define _TASK_MANAGER_CLIENT_HPP
 
-#include "../task_manager_elf_viewer/task-manager/process_info.hpp"
-#include "ElfInfo.hpp"
+#include "ClientComponents/DataHandler.hpp"
+#include "ClientComponents/NetworkSender.hpp"
+#include "ClientComponents/ResponseValidator.hpp"
+#include "Commands/CommandBuilder.hpp"
 #include "logger.hpp"
 #include <boost/asio.hpp>
-#include <ftxui/component/component.hpp>
-#include <ftxui/component/screen_interactive.hpp>
-#include <ftxui/dom/elements.hpp>
-#include <functional>
 #include <iostream>
-#include <mutex>
 #include <nlohmann/json.hpp>
 #include <string>
-#include <thread>
 #include <vector>
 
+namespace tmelfv {
+namespace client {
 using boost::asio::ip::tcp;
 using json = nlohmann::json;
-
-namespace tmelfv {
-// Класс клиента с логированием в буфер
 class TaskManagerClient {
 public:
   TaskManagerClient(boost::asio::io_context &ioContext, const std::string &host,
                     const std::string &port, Logger &log)
-      : ioContext_(ioContext), socket_(ioContext), stopped_(false), log_(log) {
+      : ioContext_(ioContext), socket_(ioContext), log_(log),
+        networkSender_(socket_, log_) {
     tcp::resolver resolver(ioContext);
     endpoints_ = resolver.resolve(host, port);
     log_.log("TaskManagerClient initialized with host: " + host +
@@ -44,10 +40,6 @@ public:
   }
 
   void connect() {
-    if (stopped_) {
-      log_.log("Connection attempt stopped as client is marked stopped.");
-      return;
-    }
     log_.log("Attempting to connect to server...");
 
     boost::asio::async_connect(
@@ -61,74 +53,25 @@ public:
         });
   }
 
-  void requestElf(std::string &path) {
-    if (stopped_) {
-      log_.log("Request for processes stopped as client is marked stopped.");
-      return;
-    }
-    log_.log("Requesting process list from server...");
-
-    json command = {{"command", "READ_ELF"}, {"path", path}};
-    std::string commandStr = command.dump() + "\n";
-
-    boost::asio::async_write(
-        socket_, boost::asio::buffer(commandStr),
-        [this](boost::system::error_code ec, std::size_t /*length*/) {
-          if (ec) {
-            log_.log("Error sending command: " + ec.message());
-          } else {
-            log_.log("Process list request sent.");
-          }
-        });
+  void requestElf(const std::string &path) {
+    log_.log("Requesting ELF data from server...");
+    std::string command = CommandBuilder::buildReadElfCommand(path);
+    networkSender_.sendAsync(command);
   }
 
   void requestProcesses() {
-    if (stopped_) {
-      log_.log("Request for processes stopped as client is marked stopped.");
-      return;
-    }
     log_.log("Requesting process list from server...");
-
-    json command = {{"command", "LIST"}};
-    std::string commandStr = command.dump() + "\n";
-
-    boost::asio::async_write(
-        socket_, boost::asio::buffer(commandStr),
-        [this](boost::system::error_code ec, std::size_t /*length*/) {
-          if (ec) {
-            log_.log("Error sending command: " + ec.message());
-          } else {
-            log_.log("Process list request sent.");
-          }
-        });
+    std::string command = CommandBuilder::buildListCommand();
+    networkSender_.sendAsync(command);
   }
 
   void killProcess(int pid) {
-    if (stopped_) {
-      log_.log("Kill request stopped as client is marked stopped.");
-      return;
-    }
     log_.log("Sending kill command for PID: " + std::to_string(pid));
-
-    json command = {{"command", "KILL"}, {"pid", pid}};
-    std::string commandStr = command.dump() + "\n";
-
-    boost::asio::async_write(
-        socket_, boost::asio::buffer(commandStr),
-        [](boost::system::error_code ec, std::size_t /*length*/) {
-          if (ec) {
-            // log_.log("Error sending kill command: " + ec.message());
-          } else {
-            // log_.log("Kill command sent successfully.");
-          }
-        });
+    std::string command = CommandBuilder::buildKillCommand(pid);
+    networkSender_.sendAsync(command);
   }
 
   void readResponse() {
-    if (stopped_) {
-      log_.log("Response reading stopped as client is marked stopped.");
-      return;
-    }
     log_.log("Waiting to read response from server...");
 
     boost::asio::async_read_until(
@@ -154,7 +97,6 @@ public:
   }
 
   void stop() {
-    stopped_ = true; // Устанавливаем флаг остановки
     boost::system::error_code ec;
     log_.log("Stopping client, shutting down socket...");
 
@@ -175,7 +117,7 @@ private:
   tcp::resolver::results_type endpoints_;
   boost::asio::streambuf buffer_;
   Logger &log_;
-  bool stopped_; // Флаг остановки для завершения всех операций
+  NetworkSender networkSender_;
 
   std::function<void(const std::vector<ProcessInfo> &)> on_process_list_update_;
   std::function<void(const ElfInfo &)> on_process_elf_update_;
@@ -183,46 +125,20 @@ private:
   void handleResponse(const json &response) {
     log_.log("Received response: " + response.dump(4));
 
-    if (response.contains("status") && response["status"] == "success") {
-      if (response.contains("data")) {
-        std::vector<ProcessInfo> processes = parseProcesses(response["data"]);
-        if (on_process_list_update_) {
-          on_process_list_update_(processes);
-        }
-        log_.log("Process list updated in UI callback.");
-      } else if (response.contains("elf")) {
-        tmelfv::ElfInfo elfData =
-            tmelfv::ElfInfo::parseElfHeader(response["elf"]);
-        if (on_process_elf_update_) {
-          on_process_elf_update_(elfData);
-        }
-      } else {
-        log_.log("Error: 'data' field is missing in the response.");
-      }
-    } else {
-      log_.log("Error: Server response has status '" +
-               response["status"].get<std::string>() + "'");
+    std::string errorMessage;
+    if (!ResponseValidator::isValid(response, errorMessage)) {
+      log_.log("Error: " + errorMessage);
+      return;
     }
-  }
 
-  std::vector<ProcessInfo> parseProcesses(const std::string &data) {
-    std::vector<ProcessInfo> processes;
-    std::istringstream stream(data);
-    std::string line;
+    std::string logMessage;
+    DataHandler::handleResponse(response, on_process_list_update_,
+                                on_process_elf_update_, logMessage);
 
-    std::getline(stream, line);
-    log_.log("Parsing processes from server response...");
-
-    while (std::getline(stream, line)) {
-      std::istringstream lineStream(line);
-      ProcessInfo process;
-      lineStream >> process.pid >> process.name;
-      processes.push_back(process);
-    }
-    log_.log("Parsed " + std::to_string(processes.size()) + " processes.");
-    return processes;
+    log_.log(logMessage);
   }
 };
+} // namespace client
 } // namespace tmelfv
 
 #endif // _TASK_MANAGER_CLIENT_HPP

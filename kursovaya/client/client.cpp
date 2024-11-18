@@ -1,78 +1,53 @@
-#include "../task_manager_elf_viewer/task-manager/process_info.hpp"
-#include "../task_manager_elf_viewer/ui/home_screen.hpp"
+#include "ClientComponents/AppRunner.hpp"
+#include "Structures/ElfInfo.hpp"
+#include "Structures/ProcessInfo.hpp"
 #include "TaskManagerClient.hpp"
+#include "UI/ElfViewerScreen.hpp"
+#include "UI/HomeScreen.hpp"
 #include "logger.hpp"
 #include <atomic>
-#include <mutex>
-#include <thread>
 
 // Глобальный объект Logger
+using namespace tmelfv::client;
 tmelfv::Logger logger;
 
-std::mutex updateMutex; // Мьютекс для синхронизации обновлений
-
-void startIoContext(boost::asio::io_context &ioContext) {
-  try {
-    ioContext.run(); // Запуск основного цикла обработки событий
-  } catch (const std::exception &e) {
-    logger.log("Exception in io_context: " + std::string(e.what()));
-  }
-}
+std::mutex updateMutex;
 
 int main() {
   try {
     boost::asio::io_context ioContext;
-    tmelfv::TaskManagerClient client(ioContext, "127.0.0.1", "8080", logger);
-    std::vector<tmelfv::ProcessInfo> initialProcesses;
-    tmelfv::ElfInfo initialElf;
+    TaskManagerClient client(ioContext, "127.0.0.1", "8080", logger);
 
-    std::atomic<bool> exitFlag(false); // Флаг завершения программы
-    tmelfv::TaskManagerScreen screen(client, initialProcesses);
-    tmelfv::ElfViewerScreen elf_screen(client, initialElf);
-
+    std::vector<ProcessInfo> initialProcesses;
+    ElfInfo initialElf;
+    TaskManagerScreen taskScreen(client, initialProcesses);
+    ElfViewerScreen elfScreen(client, initialElf);
     client.setProcessListUpdateCallback(
-        [&screen](const std::vector<tmelfv::ProcessInfo> &processes) {
-          std::lock_guard<std::mutex> lock(updateMutex); // Блокируем обновление
-          screen.UpdateProcesses(processes); // Обновляем процессы на экране
+        [&taskScreen](const std::vector<ProcessInfo> &processes) {
+          std::lock_guard<std::mutex> lock(updateMutex);
+          taskScreen.UpdateProcesses(processes);
         });
 
-    client.setElfUpdateCallback([&elf_screen](const tmelfv::ElfInfo &elf) {
-      std::lock_guard<std::mutex> lock(updateMutex); // Блокируем обновление
-      elf_screen.UpdateElfData(elf); // Обновляем процессы на экране
+    client.setElfUpdateCallback([&elfScreen](const ElfInfo &elf) {
+      std::lock_guard<std::mutex> lock(updateMutex);
+      elfScreen.UpdateElfData(elf);
     });
 
     client.connect();
     client.readResponse();
-    // setupPeriodicUpdate(client, ioContext);
+    std::atomic<bool> exitFlag(false);
 
-    // Создаем HomeScreen с переданным флагом завершения
-    tmelfv::HomeScreen hm(screen, elf_screen, exitFlag);
+    auto homeScreen =
+        std::make_shared<HomeScreen>(taskScreen, elfScreen, exitFlag);
 
-    // Запускаем HomeScreen и io_context в разных потоках
-    std::thread ioThread([&ioContext]() {
-      startIoContext(ioContext); // Запускаем основной цикл io_context
-    });
-
-    // Запускаем основной цикл для интерфейса
-    std::thread uiThread([&hm]() {
-      hm.MakeLoop(); // Основной цикл интерфейса
-    });
-
-    // Основной поток следит за флагом завершения
-    while (!exitFlag.load()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    }
-
-    // Завершаем io_context и ждем завершения потоков
-    ioContext.stop();
-    ioThread.join();
-    uiThread.join();
+    AppRunner appRunner(ioContext, exitFlag, logger);
+    appRunner.setHomeScreen(homeScreen);
+    appRunner.run();
 
   } catch (const std::exception &e) {
     logger.log("Exception: " + std::string(e.what()));
   }
 
-  // Выводим все логи после завершения работы программы
   logger.outputLogs();
 
   return 0;

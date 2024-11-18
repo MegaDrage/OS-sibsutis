@@ -1,19 +1,16 @@
 #ifndef _ELF_VIEWER_SCREEN_HPP
 #define _ELF_VIEWER_SCREEN_HPP
 
-#include "../task_manager_elf_viewer/task-manager/process_info.hpp"
-#include "ElfInfo.hpp"
-#include "TaskManagerClient.hpp"
-#include <algorithm>
+#include "../Structures/ElfInfo.hpp"
+#include "../TaskManagerClient.hpp"
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
-#include <regex>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace tmelfv {
+namespace client {
 
 class ElfViewerScreen {
 public:
@@ -22,7 +19,6 @@ public:
 
   void ShowElfScreen() {
     using namespace ftxui;
-
     int selected = 0;
 
     auto back_button = Button("Back", [&] { screen.ExitLoopClosure()(); });
@@ -118,7 +114,6 @@ public:
       }
     }
   }
-
   void UpdateElfData(const ElfInfo &elf_data) {
     elf_data_ = elf_data;
     UpdateProcessString(); // Обновить строку процесса при обновлении данных
@@ -163,6 +158,6 @@ private:
   int selected = 0;
 };
 
+} // namespace client
 } // namespace tmelfv
-
 #endif // _ELF_VIEWER_SCREEN_HPP
